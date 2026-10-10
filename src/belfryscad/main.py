@@ -361,7 +361,7 @@ def _print_info():
     print(f"BelfrySCAD {_belfryscad_version()}")
     print(f"Python {platform.python_version()} ({platform.platform()})")
     from belfryscad.versions import duplicate_installs, package_version
-    for pkg in ("PySide6", "moderngl", "openscad_cpp_evaluator", "manifold3d", "numpy"):
+    for pkg in ("PySide6-Essentials", "moderngl", "openscad_cpp_evaluator", "manifold3d", "numpy"):
         print(f"{pkg} {package_version(pkg, default='not installed')}")
     # Said out loud rather than silently resolved: two of these side by side
     # means an installer left the old one behind, and that is worth knowing

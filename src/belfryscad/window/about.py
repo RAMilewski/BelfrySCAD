@@ -19,7 +19,7 @@ ISSUES_URL = "https://github.com/BelfrySCAD/BelfrySCAD/issues"
 #: Reported alongside BelfrySCAD's own version. openscad_cpp_evaluator is
 #: the one that matters most in a bug report -- it is where the geometry
 #: comes from, and it moves independently of the app.
-_COMPONENTS = ("openscad_cpp_evaluator", "PySide6", "moderngl", "manifold3d", "numpy")
+_COMPONENTS = ("openscad_cpp_evaluator", "PySide6-Essentials", "moderngl", "manifold3d", "numpy")
 
 
 def _version_of(package: str) -> str:
