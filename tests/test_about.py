@@ -29,6 +29,15 @@ def test_it_reports_the_evaluator_version_too():
     assert info["components"]["openscad_cpp_evaluator"] != "not installed"
 
 
+def test_every_component_it_lists_is_one_we_install():
+    # Named by distribution, which is not always the import name: the
+    # project depends on PySide6-Essentials, so asking for "PySide6" said
+    # "not installed" in every install since the switch.
+    info = about_info()
+    missing = [n for n, v in info["components"].items() if v == "not installed"]
+    assert missing == []
+
+
 def test_a_missing_component_is_said_so_not_crashed_on():
     from belfryscad.window import about
 
