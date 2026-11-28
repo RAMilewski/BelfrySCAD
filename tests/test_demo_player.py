@@ -33,8 +33,9 @@ def test_parse_editing_directives():
                                  "@speed 0", "@goto 0 1", "@goto 1", "@delete 0",
                                  "@tab 0", "@tab", "@scroll 0", "@goto middle", "@zoom 2 at 1 2", "@zoom 2 to 1 2 3",
                                  "@editfontsize", "@editfontsize 5", "@editfontsize big", "@editfontsize 12 14",
-                                 "@editfontsize 12 over 1s", "@viewportleft", "@viewportleft -1",
-                                 "@viewportleft 1.5", "@viewportleft 600 700", "@viewportleft 600 over 1s"])
+                                 "@editfontsize 12 over 1s", "@viewport", "@viewport left", "@viewport 600",
+                                 "@viewport middle 600", "@viewport left -1", "@viewport left 1.5",
+                                 "@viewport left 600 700", "@viewport left 600 over 1s", "@viewportleft 600"])
 def test_parse_rejects(bad):
     with pytest.raises(DemoScriptError, match="Line 2"):
         parse("ok\n" + bad)
@@ -698,12 +699,12 @@ def test_editfontsize_sets_the_editor_text_size():
     assert out["after_step"] == 21.0, out
 
 
-def test_viewportleft_parses():
-    assert parse("@viewportleft 600\n@ViewportLeft 0 // flush left\n") == [
-        ("viewportleft", 600), ("viewportleft", 0)]
+def test_viewport_parses():
+    assert parse("@viewport left 600\n@Viewport RIGHT 1500 // to x = 1500\n@viewport top 0\n@viewport bottom 900\n") == [
+        ("viewport", "left", 600), ("viewport", "right", 1500), ("viewport", "top", 0), ("viewport", "bottom", 900)]
 
 
-VIEWPORTLEFT_DRIVER = '''
+VIEWPORT_DRIVER = '''
 import json, os, tempfile, time
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QEventLoop, QPoint, QTimer
@@ -719,31 +720,38 @@ def run(ms):
     loop = QEventLoop(); QTimer.singleShot(ms, loop.quit); loop.exec()
 w = MainWindow(); w.show(); app.processEvents()
 d = tempfile.mkdtemp(); p = os.path.join(d, "t.demo")
-open(p, "w").write("@mainwin size 1280 720\\n@pause 0.3\\n@viewportleft 600\\n@pause 0.4\\n"
-                   "@viewportleft 500\\n@pause 0.4\\n@viewportleft 1275\\n@pause 0.4\\n"
-                   "@hide editor\\n@viewportleft 300\\n")
+# The default layout: Editor on the left, Debugger on the right, Console at the bottom, nothing on top.
+open(p, "w").write("@mainwin size 1280 720\\n@pause 0.3\\n@viewport left 600\\n@pause 0.4\\n"
+                   "@viewport left 500\\n@pause 0.4\\n@viewport right 1000\\n@pause 0.4\\n"
+                   "@viewport bottom 450\\n@pause 0.4\\n@viewport top 200\\n@pause 0.4\\n"
+                   "@viewport left 1275\\n@pause 0.4\\n@hide editor\\n@viewport left 300\\n")
 w._play_demo(p)
-lefts = []
+edges = {"left": [], "right": [], "bottom": []}
 t0 = time.monotonic()
 while w._demo_player is not None and time.monotonic() - t0 < 30:
-    x = w._viewport.mapTo(w, QPoint(0, 0)).x()
-    if not lefts or lefts[-1] != x:
-        lefts.append(x)
+    c = w._viewport.mapTo(w, QPoint(0, 0))
+    for k, v in (("left", c.x()), ("right", c.x() + w._viewport.width()), ("bottom", c.y() + w._viewport.height())):
+        if not edges[k] or edges[k][-1] != v:
+            edges[k].append(v)
     run(20)
-print("RESULT" + json.dumps({"lefts": lefts, "logged": [l for l in logged if "viewportleft" in l]}), flush=True)
+print("RESULT" + json.dumps({"edges": edges, "logged": [l for l in logged if "@viewport" in l]}), flush=True)
 from belfryscad.main import hard_exit; hard_exit(0)
 '''
 
 
-def test_viewportleft_puts_the_viewport_edge_where_asked():
-    r = subprocess.run([sys.executable, "-c", VIEWPORTLEFT_DRIVER], capture_output=True, text=True, timeout=120)
+def test_viewport_puts_each_edge_where_asked():
+    r = subprocess.run([sys.executable, "-c", VIEWPORT_DRIVER], capture_output=True, text=True, timeout=120)
     line = next((l for l in r.stdout.splitlines() if l.startswith("RESULT")), None)
     assert line, r.stdout + r.stderr
     out = json.loads(line[6:])
-    lefts, logged = out["lefts"], out["logged"]
+    edges, logged = out["edges"], out["logged"]
+    lefts = edges["left"]
     assert 600 in lefts and 500 in lefts and lefts.index(600) < lefts.index(500), out
-    # Past what the right-hand panes and the viewport's minimum width leave, then no pane on the
-    # left: each says where the edge stopped.
-    assert len(logged) == 2, out
-    assert logged[0].startswith("Demo: @viewportleft 1275:") and "minimum sizes" in logged[0], out
-    assert logged[1].startswith("Demo: @viewportleft 300:") and "no pane is docked" in logged[1], out
+    assert 1000 in edges["right"], out
+    assert 450 in edges["bottom"], out
+    # No pane on top; past what the panes' minimum sizes allow; no pane on the left once the
+    # Editor is hidden: each says where the edge stopped.
+    assert len(logged) == 3, out
+    assert logged[0].startswith("Demo: @viewport top 200:") and "no pane is docked on its top" in logged[0], out
+    assert logged[1].startswith("Demo: @viewport left 1275:") and "minimum sizes" in logged[1], out
+    assert logged[2].startswith("Demo: @viewport left 300:") and "no pane is docked on its left" in logged[2], out

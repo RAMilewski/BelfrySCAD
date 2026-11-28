@@ -31,10 +31,14 @@ Return. A directive may end in a `//` comment.
                              crosshairs (Cmd+1, 2, 3); @hide turns it off
     @mainwin size 1280 800   resize the main window
     @mainwin position 100 100  move it
+    @viewport left 600       resize the panes docked on the left so the 3D
+                             view's left edge is at x = 600 in the window
+    @viewport right 1500     ... its right edge at x = 1500 (panes on the right)
+    @viewport top 100        ... its top edge at y = 100 (panes at the top)
+    @viewport bottom 900     ... its bottom edge at y = 900 (panes at the bottom);
+                             x and y are from the window's top-left corner
     @editfontsize 16         set the editor's text to 16 points (6 or more),
                              as Cmd/Ctrl +/- would but to any size; not saved
-    @viewportleft 600        resize the panes docked on the left so the 3D
-                             view starts 600 pixels from the window's left edge
     @set width 30            set a Customizer parameter, as its control would
     @pause 3                 wait 3 seconds
     @pause key               wait for Space (or a presenter remote's "next")
@@ -76,6 +80,16 @@ PANES = {"editor": "_editor_dock", "console": "_console_dock", "customizer": "_c
 TOGGLES = {"edges": "_act_show_edges", "axes": "_act_show_axes", "crosshairs": "_act_show_cross"}
 
 VIEWS = ("top", "bottom", "left", "right", "front", "back", "iso", "all", "center")
+
+#: @viewport's edges: the dock area beside each, the direction its panes
+#: resize in, and whether they grow (+1) or shrink (-1) as the edge moves
+#: right or down.
+_VIEWPORT_EDGES = {
+    "left": (Qt.DockWidgetArea.LeftDockWidgetArea, Qt.Orientation.Horizontal, 1),
+    "right": (Qt.DockWidgetArea.RightDockWidgetArea, Qt.Orientation.Horizontal, -1),
+    "top": (Qt.DockWidgetArea.TopDockWidgetArea, Qt.Orientation.Vertical, 1),
+    "bottom": (Qt.DockWidgetArea.BottomDockWidgetArea, Qt.Orientation.Vertical, -1),
+}
 DEFAULT_RATE = 8.0
 #: How long Viewport.animate_camera_to swings to a named view.
 VIEW_MS = 350
@@ -264,8 +278,9 @@ def _directive(name, args, ms):
     # 6 is the smallest the editor's own zoom goes (CodeEditor._MIN_POINT_SIZE)
     if name == "editfontsize" and len(args) == 1 and ms is None and float(args[0]) >= 6:
         return ("editfontsize", float(args[0]))
-    if name == "viewportleft" and len(args) == 1 and ms is None and int(args[0]) >= 0:
-        return ("viewportleft", int(args[0]))
+    if (name == "viewport" and len(args) == 2 and args[0].lower() in _VIEWPORT_EDGES
+            and ms is None and int(args[1]) >= 0):
+        return ("viewport", args[0].lower(), int(args[1]))
     if name == "pause" and args == ["key"]:
         return ("pause", None)
     if name == "pause" and len(args) == 1 and float(args[0]) >= 0:
@@ -566,28 +581,36 @@ class DemoPlayer(QObject):
                                                   Qt.DockWidgetArea.BottomDockWidgetArea)
             win.resizeDocks([dock], [size], Qt.Orientation.Vertical if across else Qt.Orientation.Horizontal)
 
-    def _do_viewportleft(self, x, tries=0):
-        """Widen or narrow the panes docked on the left until the viewport's
-        left edge is `x` from the main window's. Measured and corrected a
-        few times: resizeDocks lands only once laid out, and a pane's
-        minimum width or the viewport's can stop it short."""
+    def _do_viewport(self, edge, at, tries=0):
+        """Resize the panes docked on that side of the viewport until its
+        `edge` is at `at`: x for left and right, y for top and bottom, both
+        from the main window's top-left corner, as an overlay is drawn.
+        Measured and corrected a few times: resizeDocks lands only once laid
+        out, and a pane's minimum size or the viewport's can stop it short."""
         win = self._win
+        area, across, grows = _VIEWPORT_EDGES[edge]
         vp = self._viewport()
-        left = vp.mapTo(win, QPoint(0, 0)).x()
+        corner = vp.mapTo(win, QPoint(0, 0))
+        now = {"left": corner.x(), "right": corner.x() + vp.width(),
+               "top": corner.y(), "bottom": corner.y() + vp.height()}[edge]
         docks = [d for d in win.findChildren(QDockWidget)
-                 if d.isVisible() and not d.isFloating()
-                 and win.dockWidgetArea(d) == Qt.DockWidgetArea.LeftDockWidgetArea]
-        if left == x or not docks or tries >= 4:
-            if left != x:
-                why = "no pane is docked on its left" if not docks else "the panes' minimum sizes stop it"
-                win.log(f"Demo: @viewportleft {x}: the viewport's left edge is at {left}; {why}.")
+                 if d.isVisible() and not d.isFloating() and win.dockWidgetArea(d) == area]
+        if now == at or not docks or tries >= 4:
+            if now != at:
+                why = f"no pane is docked on its {edge}" if not docks else "the panes' minimum sizes stop it"
+                win.log(f"Demo: @viewport {edge} {at}: the viewport's {edge} edge is at {now}; {why}.")
             self._schedule(0)
             return
-        # The panes beside the viewport: those whose right edge is furthest right
-        edge = max(d.geometry().right() for d in docks)
-        beside = [d for d in docks if d.geometry().right() == edge]
-        win.resizeDocks(beside, [d.width() + x - left for d in beside], Qt.Orientation.Horizontal)
-        QTimer.singleShot(50, lambda: self._do_viewportleft(x, tries + 1))
+        # The panes beside the viewport: on its left those reaching furthest
+        # right, on its right those starting furthest left, and so on
+        g = {d: d.geometry() for d in docks}
+        reach = {"left": lambda r: r.x() + r.width(), "right": lambda r: -r.x(),
+                 "top": lambda r: r.y() + r.height(), "bottom": lambda r: -r.y()}[edge]
+        nearest = max(reach(r) for r in g.values())
+        beside = [d for d in docks if reach(g[d]) == nearest]
+        size = (lambda d: d.width()) if across == Qt.Orientation.Horizontal else (lambda d: d.height())
+        win.resizeDocks(beside, [size(d) + grows * (at - now) for d in beside], across)
+        QTimer.singleShot(50, lambda: self._do_viewport(edge, at, tries + 1))
 
     def _do_mainwin(self, what, a, b):
         if what == "size":
