@@ -33,7 +33,8 @@ def test_parse_editing_directives():
                                  "@speed 0", "@goto 0 1", "@goto 1", "@delete 0",
                                  "@tab 0", "@tab", "@scroll 0", "@goto middle", "@zoom 2 at 1 2", "@zoom 2 to 1 2 3",
                                  "@editfontsize", "@editfontsize 5", "@editfontsize big", "@editfontsize 12 14",
-                                 "@editfontsize 12 over 1s"])
+                                 "@editfontsize 12 over 1s", "@viewportleft", "@viewportleft -1",
+                                 "@viewportleft 1.5", "@viewportleft 600 700", "@viewportleft 600 over 1s"])
 def test_parse_rejects(bad):
     with pytest.raises(DemoScriptError, match="Line 2"):
         parse("ok\n" + bad)
@@ -695,3 +696,54 @@ def test_editfontsize_sets_the_editor_text_size():
     out = json.loads(line[6:])
     assert out["sizes"] == [13.0, 8.7, 20.0], out      # the default, the fraction kept, then a whole size
     assert out["after_step"] == 21.0, out
+
+
+def test_viewportleft_parses():
+    assert parse("@viewportleft 600\n@ViewportLeft 0 // flush left\n") == [
+        ("viewportleft", 600), ("viewportleft", 0)]
+
+
+VIEWPORTLEFT_DRIVER = '''
+import json, os, tempfile, time
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+from PySide6.QtCore import QEventLoop, QPoint, QTimer
+from PySide6.QtWidgets import QApplication
+app = QApplication([])
+from belfryscad.settings import use_scratch_settings
+use_scratch_settings(tempfile.mkdtemp(prefix="belfryscad-test-"), seed=False)
+from belfryscad.window.main_window import MainWindow
+MainWindow._render = lambda *a, **k: None
+logged = []
+MainWindow.log = lambda self, text, *a, **k: logged.append(text)
+def run(ms):
+    loop = QEventLoop(); QTimer.singleShot(ms, loop.quit); loop.exec()
+w = MainWindow(); w.show(); app.processEvents()
+d = tempfile.mkdtemp(); p = os.path.join(d, "t.demo")
+open(p, "w").write("@mainwin size 1280 720\\n@pause 0.3\\n@viewportleft 600\\n@pause 0.4\\n"
+                   "@viewportleft 500\\n@pause 0.4\\n@viewportleft 1275\\n@pause 0.4\\n"
+                   "@hide editor\\n@viewportleft 300\\n")
+w._play_demo(p)
+lefts = []
+t0 = time.monotonic()
+while w._demo_player is not None and time.monotonic() - t0 < 30:
+    x = w._viewport.mapTo(w, QPoint(0, 0)).x()
+    if not lefts or lefts[-1] != x:
+        lefts.append(x)
+    run(20)
+print("RESULT" + json.dumps({"lefts": lefts, "logged": [l for l in logged if "viewportleft" in l]}), flush=True)
+from belfryscad.main import hard_exit; hard_exit(0)
+'''
+
+
+def test_viewportleft_puts_the_viewport_edge_where_asked():
+    r = subprocess.run([sys.executable, "-c", VIEWPORTLEFT_DRIVER], capture_output=True, text=True, timeout=120)
+    line = next((l for l in r.stdout.splitlines() if l.startswith("RESULT")), None)
+    assert line, r.stdout + r.stderr
+    out = json.loads(line[6:])
+    lefts, logged = out["lefts"], out["logged"]
+    assert 600 in lefts and 500 in lefts and lefts.index(600) < lefts.index(500), out
+    # Past what the right-hand panes and the viewport's minimum width leave, then no pane on the
+    # left: each says where the edge stopped.
+    assert len(logged) == 2, out
+    assert logged[0].startswith("Demo: @viewportleft 1275:") and "minimum sizes" in logged[0], out
+    assert logged[1].startswith("Demo: @viewportleft 300:") and "no pane is docked" in logged[1], out

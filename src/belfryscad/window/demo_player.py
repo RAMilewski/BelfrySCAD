@@ -33,6 +33,8 @@ Return. A directive may end in a `//` comment.
     @mainwin position 100 100  move it
     @editfontsize 16         set the editor's text to 16 points (6 or more),
                              as Cmd/Ctrl +/- would but to any size; not saved
+    @viewportleft 600        resize the panes docked on the left so the 3D
+                             view starts 600 pixels from the window's left edge
     @set width 30            set a Customizer parameter, as its control would
     @pause 3                 wait 3 seconds
     @pause key               wait for Space (or a presenter remote's "next")
@@ -61,9 +63,9 @@ import time
 
 import numpy as np
 
-from PySide6.QtCore import QEasingCurve, QEvent, QObject, Qt, QTimer, QVariantAnimation
+from PySide6.QtCore import QEasingCurve, QEvent, QObject, QPoint, Qt, QTimer, QVariantAnimation
 from PySide6.QtGui import QPainter, QPixmap
-from PySide6.QtWidgets import QApplication, QWidget
+from PySide6.QtWidgets import QApplication, QDockWidget, QWidget
 
 #: Pane names for @show, @hide and @scroll, and their MainWindow docks.
 PANES = {"editor": "_editor_dock", "console": "_console_dock", "customizer": "_customizer_dock",
@@ -262,6 +264,8 @@ def _directive(name, args, ms):
     # 6 is the smallest the editor's own zoom goes (CodeEditor._MIN_POINT_SIZE)
     if name == "editfontsize" and len(args) == 1 and ms is None and float(args[0]) >= 6:
         return ("editfontsize", float(args[0]))
+    if name == "viewportleft" and len(args) == 1 and ms is None and int(args[0]) >= 0:
+        return ("viewportleft", int(args[0]))
     if name == "pause" and args == ["key"]:
         return ("pause", None)
     if name == "pause" and len(args) == 1 and float(args[0]) >= 0:
@@ -561,6 +565,29 @@ class DemoPlayer(QObject):
             across = win.dockWidgetArea(dock) in (Qt.DockWidgetArea.TopDockWidgetArea,
                                                   Qt.DockWidgetArea.BottomDockWidgetArea)
             win.resizeDocks([dock], [size], Qt.Orientation.Vertical if across else Qt.Orientation.Horizontal)
+
+    def _do_viewportleft(self, x, tries=0):
+        """Widen or narrow the panes docked on the left until the viewport's
+        left edge is `x` from the main window's. Measured and corrected a
+        few times: resizeDocks lands only once laid out, and a pane's
+        minimum width or the viewport's can stop it short."""
+        win = self._win
+        vp = self._viewport()
+        left = vp.mapTo(win, QPoint(0, 0)).x()
+        docks = [d for d in win.findChildren(QDockWidget)
+                 if d.isVisible() and not d.isFloating()
+                 and win.dockWidgetArea(d) == Qt.DockWidgetArea.LeftDockWidgetArea]
+        if left == x or not docks or tries >= 4:
+            if left != x:
+                why = "no pane is docked on its left" if not docks else "the panes' minimum sizes stop it"
+                win.log(f"Demo: @viewportleft {x}: the viewport's left edge is at {left}; {why}.")
+            self._schedule(0)
+            return
+        # The panes beside the viewport: those whose right edge is furthest right
+        edge = max(d.geometry().right() for d in docks)
+        beside = [d for d in docks if d.geometry().right() == edge]
+        win.resizeDocks(beside, [d.width() + x - left for d in beside], Qt.Orientation.Horizontal)
+        QTimer.singleShot(50, lambda: self._do_viewportleft(x, tries + 1))
 
     def _do_mainwin(self, what, a, b):
         if what == "size":
